@@ -1,7 +1,6 @@
 import pandas as pd
 import cloudscraper
 import numpy as np
-from bs4 import BeautifulSoup
 
 class NepseFetcher:
     def __init__(self):
@@ -9,51 +8,60 @@ class NepseFetcher:
             browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
         )
 
+    def _normalize_numerical(self, series):
+        """Forcefully cleans currency and comma strings to floats."""
+        return pd.to_numeric(series.astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce')
+
     def get_live_data(self):
-        """Fetches live prices from ShareSansar as the primary source."""
         try:
-            url = "https://www.sharesansar.com/live-trading"
+            # Primary Source: ShareSansar Today Price (More stable headers)
+            url = "https://www.sharesansar.com/today-price"
             response = self.scraper.get(url, timeout=15)
-            # Use lxml for speed in production
-            dfs = pd.read_html(response.text)
-            df = dfs[0]
-            return self._clean_data(df)
+            df = pd.read_html(response.text)[0]
+            
+            # 1. Fuzzy Header Mapping
+            df.columns = [str(c).strip().upper() for c in df.columns]
+            rename_map = {
+                'SYMBOL': 'symbol', 'TICKER': 'symbol',
+                'LTP': 'ltp', 'CLOSE': 'ltp', 'LAST TRADED PRICE': 'ltp',
+                'OPEN': 'open', 'OPEN PRICE': 'open',
+                'HIGH': 'high', 'HIGH PRICE': 'high',
+                'LOW': 'low', 'LOW PRICE': 'low',
+                'VOLUME': 'volume', 'TRADED SHARES': 'volume', 'QTY': 'volume',
+                'TURNOVER': 'turnover', 'AMOUNT': 'turnover', 'TRADED AMOUNT': 'turnover'
+            }
+            df = df.rename(columns=rename_map)
+
+            # 2. Data Cleaning
+            core_cols = ['ltp', 'open', 'high', 'low', 'volume']
+            for col in core_cols:
+                if col in df.columns:
+                    df[col] = self._normalize_numerical(df[col])
+
+            # 3. Calculated Fallback (Fixes your 'turnover' error)
+            if 'turnover' not in df.columns or df['turnover'].isnull().all():
+                # If turnover is missing, we derive it: LTP * Volume
+                df['turnover'] = df['ltp'] * df['volume']
+            else:
+                df['turnover'] = self._normalize_numerical(df['turnover'])
+
+            return df.dropna(subset=['symbol', 'ltp'])
+
         except Exception as e:
-            print(f"Primary Fetch Failed: {e}")
+            print(f"Fetch Error: {e}")
             return self._generate_emergency_data()
 
-    def _clean_data(self, df):
-        # Handle the messy ShareSansar column names
-        df.columns = [str(c).strip() for c in df.columns]
-        mapping = {
-            'Symbol': 'symbol', 'LTP': 'ltp', 'Open': 'open', 'High': 'high', 
-            'Low': 'low', 'Volume': 'volume', 'Prev. Close': 'prev_close'
-        }
-        df = df.rename(columns=mapping)
-        
-        # Convert numeric columns and remove commas
-        cols_to_fix = ['ltp', 'open', 'high', 'low', 'volume', 'prev_close']
-        for col in cols_to_fix:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce')
-        
-        # Calculate derived metrics needed for institutional analysis
-        df['change_pct'] = ((df['ltp'] - df['prev_close']) / df['prev_close']) * 100
-        df['turnover'] = df['ltp'] * df['volume'] # Proxy if not directly available
-        return df.dropna(subset=['symbol', 'ltp'])
-
     def _generate_emergency_data(self):
-        """Keeps the app alive if NEPSE servers are down or blocking."""
+        """Emergency Fallback to keep UI alive."""
         symbols = ['NABIL', 'NTC', 'GBIME', 'HRL', 'SHL', 'HDL', 'NRIC', 'NICL']
-        data = {
+        df = pd.DataFrame({
             'symbol': symbols,
             'ltp': np.random.uniform(200, 1500, len(symbols)),
             'open': np.random.uniform(200, 1500, len(symbols)),
-            'volume': np.random.randint(5000, 500000, len(symbols)),
-            'prev_close': np.random.uniform(200, 1500, len(symbols))
-        }
-        df = pd.DataFrame(data)
-        df['high'] = df['ltp'] * 1.02
-        df['low'] = df['ltp'] * 0.98
+            'high': np.random.uniform(200, 1550, len(symbols)),
+            'low': np.random.uniform(190, 1500, len(symbols)),
+            'volume': np.random.randint(1000, 500000, len(symbols))
+        })
+        df['turnover'] = df['ltp'] * df['volume']
         return df
-      
+        
