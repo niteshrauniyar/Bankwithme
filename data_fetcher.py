@@ -1,67 +1,73 @@
 import pandas as pd
 import numpy as np
-import cloudscraper
+import requests
 import re
 
 class NepseFetcher:
     def __init__(self):
-        self.scraper = cloudscraper.create_scraper(browser={'browser': 'chrome'})
+        # Official NEPSE headers to prevent "403 Forbidden"
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Referer': 'https://www.nepalstock.com.np/'
+        }
 
     def get_live_data(self):
         try:
-            # We target the 'Sectorwise' page as it is more stable than 'Today Price'
-            url = "https://www.sharesansar.com/sectorwise-share-price"
-            r = self.scraper.get(url, timeout=25)
-            all_tables = pd.read_html(r.text)
+            # 1. Fetch from Official NEPSE NOTS API
+            # This endpoint provides the "Today's Price" JSON directly
+            url = "https://www.nepalstock.com.np/api/nots/nepse-data/today-price?size=500"
+            response = requests.get(url, headers=self.headers, timeout=20)
             
-            # Find the table that actually contains 'SYMBOL'
-            master_list = []
-            for df in all_tables:
-                df.columns = [str(c).strip().upper() for c in df.columns]
-                if 'SYMBOL' in df.columns:
-                    master_list.append(df)
-            
-            if not master_list:
-                return self._get_fallback_data()
+            if response.status_code != 200:
+                return self._fallback_logic()
 
-            full_df = pd.concat(master_list, ignore_index=True)
-            
-            # Standardize column names
+            json_data = response.json()
+            # Extract content from the NEPSE JSON structure
+            raw_list = json_data.get('content', [])
+            df = pd.DataFrame(raw_list)
+
+            if df.empty: return self._fallback_logic()
+
+            # 2. Map Official NEPSE Keys to Our Variables
+            # Official keys: 'symbol', 'lastTradedPrice', 'openPrice', 'highPrice', 'lowPrice', 'totalQty', 'totalTurnover'
             mapping = {
-                'SYMBOL': 'symbol', 'LTP': 'ltp', 'LTP(RS)': 'ltp', 
-                'OPEN': 'open', 'HIGH': 'high', 'LOW': 'low',
-                'VOLUME': 'volume', 'TRADED SHARES': 'volume',
-                'TURNOVER': 'turnover', 'AMOUNT': 'turnover'
+                'symbol': 'symbol',
+                'lastTradedPrice': 'ltp',
+                'openPrice': 'open',
+                'highPrice': 'high',
+                'lowPrice': 'low',
+                'totalQty': 'volume',
+                'totalTurnover': 'turnover'
             }
-            full_df = full_df.rename(columns=mapping)
+            df = df.rename(columns=mapping)
 
-            # High-accuracy numeric cleaning
-            cols_to_fix = ['ltp', 'open', 'high', 'low', 'volume', 'turnover']
-            for col in cols_to_fix:
-                if col in full_df.columns:
-                    full_df[col] = full_df[col].astype(str).apply(self._clean_val)
+            # 3. Final Numeric Scrubbing
+            cols = ['ltp', 'open', 'high', 'low', 'volume', 'turnover']
+            for col in cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
 
-            # Remove rows that aren't stocks (like sub-headers)
-            full_df = full_df[full_df['symbol'].str.len() <= 7]
-            return full_df.dropna(subset=['symbol', 'ltp']).drop_duplicates('symbol')
+            # Filtering out non-equity instruments (Indices, Debentures etc. if needed)
+            return df[['symbol', 'ltp', 'open', 'high', 'low', 'volume', 'turnover']].drop_duplicates('symbol')
 
-        except Exception:
-            return self._get_fallback_data()
+        except Exception as e:
+            print(f"Official API Error: {e}")
+            return self._fallback_logic()
 
-    def _clean_val(self, x):
-        if pd.isna(x) or str(x).lower() == 'nan': return 0.0
-        cleaned = re.sub(r'[^\d.-]', '', str(x))
-        try: return float(cleaned)
-        except: return 0.0
-
-    def _get_fallback_data(self):
-        """Mock Data for April 23, 2026 (NST Late Night Testing)"""
-        data = {
-            'symbol': ['NICA', 'KBL', 'NIFRA', 'HRL', 'CIT', 'NRN', 'AKJCL', 'PRSF'],
-            'ltp': [364.5, 224.0, 265.2, 515.0, 1790.0, 1515.0, 393.0, 13.15],
-            'open': [360.0, 221.5, 267.0, 505.0, 1785.0, 1503.9, 390.0, 13.0],
-            'volume': [120256, 671206, 116327, 45000, 4962, 65260, 674988, 837300],
-            'turnover': [43833312, 150350144, 30850020, 23175000, 8881980, 98868900, 265270284, 11010495]
-        }
-        return pd.DataFrame(data)
-        
+    def _fallback_logic(self):
+        """Emergency Fallback if the official API is under maintenance"""
+        import cloudscraper
+        scraper = cloudscraper.create_scraper()
+        try:
+            # Secondary official-like source
+            r = scraper.get("https://www.sharesansar.com/live-trading", timeout=10)
+            df = pd.read_html(r.text)[0]
+            df.columns = [str(c).strip().upper() for c in df.columns]
+            df = df.rename(columns={'SYMBOL': 'symbol', 'LTP': 'ltp', 'VOLUME': 'volume', 'OPEN': 'open'})
+            for c in ['ltp', 'volume', 'open']:
+                df[c] = pd.to_numeric(df[c].astype(str).str.replace(',', ''), errors='coerce')
+            df['turnover'] = df['ltp'] * df['volume']
+            return df
+        except:
+            return pd.DataFrame()
