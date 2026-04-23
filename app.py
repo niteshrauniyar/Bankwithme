@@ -4,44 +4,57 @@ from data_fetcher import NepseFetcher
 from analysis import InstitutionalEngine
 from signals import SignalLab
 
-st.set_page_config(page_title="NEPSE Institutional", layout="wide")
+st.set_page_config(page_title="NEPSE Institutional Pro", layout="wide")
 
-# Initialization
-if 'fetcher' not in st.session_state:
-    st.session_state.fetcher = NepseFetcher()
-if 'engine' not in st.session_state:
-    st.session_state.engine = InstitutionalEngine()
+# Persistent Data Loading
+@st.cache_data(ttl=60)
+def get_market_data():
+    raw = NepseFetcher().get_live_data()
+    processed = InstitutionalEngine().apply_metrics(raw)
+    return processed
 
-st.title("🛡️ Institutional Intelligence System (NEPSE)")
+st.title("🏛️ NEPSE Advanced Quant Terminal")
 
 try:
-    # 1. Fetch & Analyze
-    raw_data = st.session_state.fetcher.get_live_data()
-    data = st.session_state.engine.apply_metrics(raw_data)
-    avg_amihud = data['amihud'].median()
+    data = get_market_data()
+    
+    # Global Stats for Signal Logic
+    stats = {
+        'amihud_median': data['amihud'].median(),
+        'vol_median': data['volume'].median()
+    }
 
-    # 2. Logic to prevent NameError
-    summary_list = []
-    for _, row in data.iterrows():
-        res = SignalLab.get_summary(row, avg_amihud)
-        if res['Signal'] != "NEUTRAL":
-            summary_list.append(res)
+    # Dashboard Metrics
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Live Symbols", len(data))
+    m2.metric("Institutional Stocks", len(data[data['is_institutional']]))
+    m3.metric("Avg Mkt Volatility", f"{data['returns'].mean()*100:.2f}%")
+    m4.metric("Active Metaorders", len(data[data['rvol'] > 3]))
 
-    # 3. UI
-    tab1, tab2 = st.tabs(["🎯 AI Trade Signals", "📋 Microstructure Data"])
+    tab1, tab2, tab3 = st.tabs(["🎯 AI Signals", "🔍 Institutional Matrix", "📈 Full Market Scanner"])
 
     with tab1:
-        if summary_list:
-            summary_df = pd.DataFrame(summary_list)
-            st.success(f"Found {len(summary_df)} Institutional Setups")
-            st.dataframe(summary_df[['Symbol', 'Signal', 'SimpleSummary', 'Target', 'StopLoss']], use_container_width=True)
+        signals = []
+        for _, row in data.iterrows():
+            sig = SignalLab.get_summary(row, stats)
+            if sig['Signal'] != "WAIT":
+                signals.append(sig)
+        
+        if signals:
+            sig_df = pd.DataFrame(signals).sort_values(by='Confidence', ascending=False)
+            st.dataframe(sig_df[['Symbol', 'Signal', 'Confidence', 'Target', 'SimpleSummary']], use_container_width=True, hide_index=True)
         else:
-            st.info("No high-conviction institutional patterns detected in current data.")
+            st.info("Market is currently quiet. No institutional footprints detected.")
 
     with tab2:
+        st.subheader("Smart Money Cluster Analysis")
+        inst_only = data[data['is_institutional']].sort_values(by='turnover', ascending=False)
+        st.dataframe(inst_only[['symbol', 'ltp', 'volume', 'amihud', 'kyle_lambda', 'volatility_regime']], use_container_width=True)
+
+    with tab3:
+        st.subheader("All Sector Data")
         st.dataframe(data, use_container_width=True)
 
 except Exception as e:
-    st.error(f"Critical Runtime Error: {e}")
-    st.info("Market may be closed or site structure has changed. Using fallback data.")
+    st.error(f"Engine Error: {e}")
     
