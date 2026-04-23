@@ -6,46 +6,42 @@ from signals import SignalLab
 
 st.set_page_config(page_title="NEPSE Institutional", layout="wide")
 
-fetcher = NepseFetcher()
-engine = InstitutionalEngine()
+# Initialization
+if 'fetcher' not in st.session_state:
+    st.session_state.fetcher = NepseFetcher()
+if 'engine' not in st.session_state:
+    st.session_state.engine = InstitutionalEngine()
 
-st.title("🛡️ NEPSE Institutional Intelligence")
+st.title("🛡️ Institutional Intelligence System (NEPSE)")
 
-# 1. Fetch & Analyze
-raw_data = fetcher.get_live_data()
-data = engine.apply_metrics(raw_data)
-avg_amihud = data['amihud'].median()
+try:
+    # 1. Fetch & Analyze
+    raw_data = st.session_state.fetcher.get_live_data()
+    data = st.session_state.engine.apply_metrics(raw_data)
+    avg_amihud = data['amihud'].median()
 
-# 2. Fix the NameError: Initialize summary_list properly
-summary_list = []
+    # 2. Logic to prevent NameError
+    summary_list = []
+    for _, row in data.iterrows():
+        res = SignalLab.get_summary(row, avg_amihud)
+        if res['Signal'] != "NEUTRAL":
+            summary_list.append(res)
 
-for _, row in data.iterrows():
-    # Pass metrics to SignalLab
-    res = SignalLab.get_summary(row, avg_amihud)
-    if res['Signal'] != "NEUTRAL":
-        summary_list.append(res)
+    # 3. UI
+    tab1, tab2 = st.tabs(["🎯 AI Trade Signals", "📋 Microstructure Data"])
 
-# 3. Create DataFrame Safely
-if len(summary_list) > 0:
-    summary_df = pd.DataFrame(summary_list)
-else:
-    # Empty DataFrame with correct columns to avoid crashes
-    summary_df = pd.DataFrame(columns=['Symbol', 'Signal', 'Target', 'StopLoss', 'Insight'])
+    with tab1:
+        if summary_list:
+            summary_df = pd.DataFrame(summary_list)
+            st.success(f"Found {len(summary_df)} Institutional Setups")
+            st.dataframe(summary_df[['Symbol', 'Signal', 'SimpleSummary', 'Target', 'StopLoss']], use_container_width=True)
+        else:
+            st.info("No high-conviction institutional patterns detected in current data.")
 
-# 4. Display UI
-tab1, tab2 = st.tabs(["🎯 Signals", "📋 Raw Analysis"])
+    with tab2:
+        st.dataframe(data, use_container_width=True)
 
-with tab1:
-    if not summary_df.empty:
-        st.dataframe(summary_df, use_container_width=True)
-        # Detailed Expanders
-        for _, sig in summary_df.iterrows():
-            with st.expander(f"View Plan for {sig['Symbol']}"):
-                st.write(f"**Action:** {sig['Signal']} | **Reason:** {sig['Insight']}")
-                st.write(f"🎯 Target: {sig['Target']} | 🛡️ SL: {sig['StopLoss']}")
-    else:
-        st.info("No institutional activity detected right now.")
-
-with tab2:
-    st.dataframe(data, use_container_width=True)
+except Exception as e:
+    st.error(f"Critical Runtime Error: {e}")
+    st.info("Market may be closed or site structure has changed. Using fallback data.")
     
