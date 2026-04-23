@@ -1,9 +1,7 @@
 streamlit
 pandas
 numpy
-plotly
-requests
-beautifulsoup4
 cloudscraper
 lxml
+beautifulsoup4
 scikit-learn
