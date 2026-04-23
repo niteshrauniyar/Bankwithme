@@ -1,67 +1,64 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 from data_fetcher import NepseFetcher
 from analysis import InstitutionalEngine
-from signals import SignalLab
 
+# 1. Page Configuration
 st.set_page_config(page_title="NEPSE Institutional Intelligence", layout="wide")
 
-# Custom CSS for Institutional "Terminal" look
-st.markdown("""
-    <style>
-    .main { background-color: #000000; }
-    .stMetric { background-color: #111; padding: 15px; border-radius: 10px; border: 1px solid #333; }
-    </style>
-""", unsafe_allow_html=True)
-
-# Persistence & Data Loading
+# 2. Initialization
 fetcher = NepseFetcher()
 engine = InstitutionalEngine()
 
 st.title("🏛️ NEPSE Institutional Intelligence")
-st.caption("Live Order-Flow & Smart Money Detection Engine")
+st.subheader("Smart Money & Liquidity Detection Engine")
 
-@st.cache_data(ttl=60) # Cache for 1 minute to avoid getting IP banned
-def get_processed_data():
-    raw = fetcher.get_live_data()
-    analyzed = engine.apply_metrics(raw)
-    signals = SignalLab.compute(analyzed)
-    return analyzed, signals
+# 3. Data Pipeline with Caching
+@st.cache_data(ttl=300) # Refresh data every 5 minutes
+def load_and_analyze():
+    raw_df = fetcher.get_live_data()
+    if raw_df is None or raw_df.empty:
+        return None
+    processed_df = engine.apply_metrics(raw_df)
+    return processed_df
 
-try:
-    data, signals = get_processed_data()
+# 4. Execution
+data = load_and_analyze()
 
-    # Dashboard Top Row
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Market Sentiment", "BULLISH" if data['change_pct'].mean() > 0 else "BEARISH")
-    c2.metric("Avg. Volatility", f"{data['returns'].mean()*100:.2f}%")
-    c3.metric("Institutional Stocks", len(data[data['is_institutional']]))
-    c4.metric("Active Symbols", len(data))
+if data is not None:
+    # Sidebar Filters
+    st.sidebar.header("Scan Filters")
+    min_vol = st.sidebar.slider("Min Volume", 0, int(data['volume'].max()), 1000)
+    filtered_data = data[data['volume'] >= min_vol]
 
-    tab1, tab2, tab3 = st.tabs(["🎯 Trade Signals", "🧠 Institutional Analysis", "📈 Market Scan"])
+    # Dashboard Metrics
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Market Symbols", len(data))
+    m2.metric("Institutional Activity", f"{len(data[data['is_institutional']])} Symbols")
+    m3.metric("Avg Market Volatility", f"{data['returns'].mean()*100:.2f}%")
+
+    tab1, tab2, tab3 = st.tabs(["🎯 High Conviction Signals", "🧠 Institutional Footprint", "📋 All Data"])
 
     with tab1:
-        # Show only high confidence signals
-        high_conviction = signals[signals['Confidence'] > 40].sort_values('Confidence', ascending=False)
-        st.dataframe(high_conviction, use_container_width=True, hide_index=True)
+        # Signal Logic: High Volume + Low Price Impact (Absorption)
+        signals = data[(data['is_institutional']) & (data['ltp'] > data['open'])].copy()
+        if not signals.empty:
+            st.success("Strong Institutional Accumulation Detected in these symbols:")
+            st.dataframe(signals[['symbol', 'ltp', 'volume', 'amihud']], use_container_width=True)
+        else:
+            st.info("No high-conviction institutional signals at this moment.")
 
     with tab2:
-        st.subheader("Smart Money Footprint (Volume vs Price Impact)")
-        fig = px.scatter(data, x="volume", y="amihud", color="is_institutional", 
-                         size="turnover", hover_name="symbol",
-                         log_x=True, template="plotly_dark",
-                         title="Red dots indicate Institutional Clustering")
+        fig = px.scatter(data, x="volume", y="amihud", color="is_institutional",
+                         hover_name="symbol", size="turnover", log_x=True,
+                         title="Price Impact (Amihud) vs Volume Cluster",
+                         template="plotly_dark", color_discrete_map={True: '#00ff00', False: '#444444'})
         st.plotly_chart(fig, use_container_width=True)
 
     with tab3:
-        st.subheader("Full Market Heatmap")
-        st.dataframe(data[['symbol', 'ltp', 'change_pct', 'volume', 'is_institutional']], use_container_width=True)
-
-except Exception as e:
-    st.error(f"System Error: {e}")
-    st.info("Check internet connection or NEPSE server status.")
-
-st.sidebar.markdown("---")
-st.sidebar.write("⚡ **Data Source:** ShareSansar/NEPSE Alpha")
-st.sidebar.write("🤖 **Model:** Quantitative Microstructure v2.1")
+        st.dataframe(data.sort_values(by='turnover', ascending=False), use_container_width=True)
+else:
+    st.error("Could not fetch data from NEPSE sources. Please check connection.")
+    
