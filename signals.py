@@ -1,52 +1,41 @@
 class SignalLab:
     @staticmethod
-    def get_summary(row, market_median_amihud):
+    def get_summary(row, market_avg_amihud):
         score = 0
-        factors = []
+        verdict = "NEUTRAL"
+        reasons = []
 
-        # Logic 1: Smart Money Cluster
-        if row['is_institutional']:
+        # Logic: Accumulation
+        if row['is_institutional'] and row['ltp'] > row['open']:
             score += 40
-            factors.append("Institutional Clustering")
-
-        # Logic 2: Absorption (High Vol + Low Price Impact)
-        if row['rvol'] > 2.0 and row['amihud'] < market_median_amihud:
+            reasons.append("Institutional Accumulation")
+        
+        # Logic: Absorption (Price not moving much despite big volume)
+        if row['vol_intensity'] > 2.0 and row['amihud'] < market_avg_amihud:
             score += 30
-            factors.append("Liquidity Absorption")
+            reasons.append("Big Player Absorption")
 
-        # Logic 3: Trend Confirmation
-        if row['ltp'] > row['open']:
-            score += 20
-            factors.append("Bullish Impulse")
-
-        # Classification
-        verdict = "WAIT"
-        if score >= 70: verdict = "STRONG BUY"
+        if score >= 60: verdict = "STRONG BUY"
         elif score >= 40: verdict = "BUY"
-        elif row['ltp'] < row['open'] * 0.98 and row['is_institutional']: verdict = "SELL / EXIT"
+        elif row['ltp'] < row['open'] * 0.98 and row['is_institutional']: verdict = "DANGER: SELL"
 
-        # Trading Levels
-        entry = row['ltp']
-        target = round(entry * 1.12, 1) # 12% target
-        sl = round(entry * 0.95, 1)    # 5% stop loss
+        target = round(row['ltp'] * 1.12, 1) if "BUY" in verdict else 0.0
+        sl = round(row['ltp'] * 0.94, 1)
 
-        # Simple Words logic
+        # Simple Words Explanation
         if verdict == "STRONG BUY":
-            summary = f"YES: High institutional conviction. Smart money is absorbing supply. Target Rs. {target}."
-        elif verdict == "BUY":
-            summary = f"WATCH: Accumulation detected. Price looks efficient for entry. Target Rs. {target}."
-        elif verdict == "SELL / EXIT":
-            summary = "NO: Institutional distribution (selling) detected. Avoid or exit current position."
+            explanation = f"YES: Big money is entering. Buy near {row['ltp']}. Target Rs. {target}."
+        elif verdict == "DANGER: SELL":
+            explanation = f"NO: Institutional distribution (selling) detected. Protect capital. Exit."
         else:
-            summary = "NEUTRAL: Retail noise. No clear big player footprint."
+            explanation = "WAIT: No clear footprint from the 'Big Players' right now."
 
         return {
             'Symbol': row['symbol'],
-            'Signal': verdict,
-            'Confidence': f"{score}%",
+            'Action': verdict,
+            'Advice': explanation,
             'Target': target,
-            'StopLoss': sl,
-            'Analysis': " + ".join(factors) if factors else "No Institutional Activity",
-            'SimpleAdvice': summary
+            'SL': sl,
+            'Confidence': f"{score}%"
         }
         
