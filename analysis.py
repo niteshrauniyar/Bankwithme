@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-from sklearn.cluster import KMeans
 
 class InstitutionalEngine:
     @staticmethod
@@ -8,27 +7,19 @@ class InstitutionalEngine:
         if df.empty: return df
         df = df.copy()
 
-        # Calculation of Price Movement (Returns)
-        df['returns'] = (abs(df['ltp'] - df['open']) / df['open']).replace([np.inf, -np.inf], 0).fillna(0)
+        # 1. Volatility Calculation
+        df['change_pct'] = ((df['ltp'] - df['open']) / df['open'] * 100).fillna(0)
         
-        # Amihud Measure: Lower = Institutional Absorption | Higher = Retail Volatility
-        df['amihud'] = df['returns'] / ((df['turnover'] / 1_000_000) + 1e-9)
+        # 2. Amihud Measure (Price Impact)
+        # Measures how much volume it takes to move the price 1%
+        df['amihud'] = (abs(df['change_pct']) / (df['turnover'] / 1_000_000 + 1e-9))
         
-        # Relative Volume (Compared to market average)
-        df['rvol'] = df['volume'] / (df['volume'].median() + 1e-9)
-
-        # ML Cluster Detection
-        try:
-            X = df[['volume', 'turnover', 'amihud']].fillna(0)
-            X_norm = (X - X.mean()) / (X.std() + 1e-9)
-            kmeans = KMeans(n_clusters=min(len(df), 3), n_init=10, random_state=42)
-            df['cluster'] = kmeans.fit_predict(X_norm)
-            
-            # Identify the cluster with the highest median turnover
-            inst_id = df.groupby('cluster')['turnover'].median().idxmax()
-            df['is_institutional'] = df['cluster'] == inst_id
-        except:
-            df['is_institutional'] = False
-
+        # 3. Smart Money Detection
+        # High Turnover + High Volume relative to market median
+        m_turnover = df['turnover'].median()
+        m_volume = df['volume'].median()
+        
+        df['is_institutional'] = (df['turnover'] > m_turnover * 2) & (df['volume'] > m_volume * 1.5)
+        
         return df
         
