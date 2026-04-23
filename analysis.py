@@ -8,26 +8,23 @@ class InstitutionalEngine:
         if df.empty: return df
         df = df.copy()
 
-        # 1. Volatility & Returns
-        df['returns'] = (abs(df['ltp'] - df['open']) / df['open']).fillna(0)
+        # Calculation of Price Movement (Returns)
+        df['returns'] = (abs(df['ltp'] - df['open']) / df['open']).replace([np.inf, -np.inf], 0).fillna(0)
         
-        # 2. Amihud Illiquidity Measure (Price move per 1 Million NPR)
-        # Higher = Illiquid/Retail | Lower = Deep Liquidity/Institutional
+        # Amihud Measure: Lower = Institutional Absorption | Higher = Retail Volatility
         df['amihud'] = df['returns'] / ((df['turnover'] / 1_000_000) + 1e-9)
         
-        # 3. Relative Volume (Current stock vs Market median)
+        # Relative Volume (Compared to market average)
         df['rvol'] = df['volume'] / (df['volume'].median() + 1e-9)
 
-        # 4. Institutional Clustering (ML)
+        # ML Cluster Detection
         try:
-            features = df[['volume', 'turnover', 'amihud']].fillna(0)
-            # Normalize for KMeans
-            features_norm = (features - features.mean()) / (features.std() + 1e-9)
-            
+            X = df[['volume', 'turnover', 'amihud']].fillna(0)
+            X_norm = (X - X.mean()) / (X.std() + 1e-9)
             kmeans = KMeans(n_clusters=min(len(df), 3), n_init=10, random_state=42)
-            df['cluster'] = kmeans.fit_predict(features_norm)
+            df['cluster'] = kmeans.fit_predict(X_norm)
             
-            # Label the high-turnover cluster as 'Smart Money'
+            # Identify the cluster with the highest median turnover
             inst_id = df.groupby('cluster')['turnover'].median().idxmax()
             df['is_institutional'] = df['cluster'] == inst_id
         except:
