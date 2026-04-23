@@ -4,45 +4,34 @@ from data_fetcher import NepseFetcher
 from analysis import InstitutionalEngine
 from signals import SignalLab
 
-st.set_page_config(page_title="NEPSE Pro Official", layout="wide")
+st.set_page_config(page_title="NEPSE Hard-Quant", layout="wide")
 
-# Persistent data to handle "Off-Market" hours
-if 'last_valid_data' not in st.session_state:
-    st.session_state.last_valid_data = pd.DataFrame()
+st.title("🏛️ NEPSE Institutional Terminal")
 
 fetcher = NepseFetcher()
 engine = InstitutionalEngine()
 
-st.title("🏛️ NEPSE Official Source Intelligence")
-
-if st.button("🔄 Refresh Official Data"):
-    with st.spinner("Handshaking with NEPSE Servers..."):
-        raw_df = fetcher.get_live_data()
+if st.button("🚀 Fetch Hard Data"):
+    raw = fetcher.get_live_data()
+    if not raw.empty:
+        data = engine.apply_metrics(raw)
         
-        if not raw_df.empty:
-            processed_df = engine.apply_metrics(raw_df)
-            st.session_state.last_valid_data = processed_df
-            st.success("Data synchronized with official NOTS API.")
-        else:
-            st.warning("Market is Closed. Showing last recorded session data.")
-
-# Display Logic
-if not st.session_state.last_valid_data.empty:
-    data = st.session_state.last_valid_data
-    avg_amihud = data['amihud'].median()
-    
-    tab1, tab2 = st.tabs(["🎯 Trade Advice", "📊 Market Depth"])
-    
-    with tab1:
-        summaries = [SignalLab.get_summary(row, avg_amihud) for _, row in data.iterrows()]
-        res_df = pd.DataFrame(summaries)
+        # Generate Signals
+        signals = [SignalLab.get_advice(row) for _, row in data.iterrows()]
+        sig_df = pd.DataFrame(signals)
         
-        # Actionable filter
-        action_df = res_df[res_df['Action'] != "WAIT"].sort_values(by='Confidence', ascending=False)
-        st.dataframe(action_df, use_container_width=True, hide_index=True)
-    
-    with tab2:
-        st.dataframe(data.sort_values(by='turnover', ascending=False), use_container_width=True)
-else:
-    st.info("Please click 'Refresh' to pull the latest market session.")
-    
+        t1, t2 = st.tabs(["🎯 Trade Signals", "📊 Market Scanner"])
+        
+        with t1:
+            # Filter only for Buy/Sell
+            actionable = sig_df[sig_df['Action'] != "WAIT"].sort_values('Confidence', ascending=False)
+            if not actionable.empty:
+                st.dataframe(actionable, use_container_width=True, hide_index=True)
+            else:
+                st.info("No institutional signals found. Market is currently retail-driven.")
+                
+        with t2:
+            st.dataframe(data, use_container_width=True)
+    else:
+        st.error("Failed to fetch data. Market might be closed or API is restricted.")
+        
