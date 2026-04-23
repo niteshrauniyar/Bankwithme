@@ -4,57 +4,37 @@ from data_fetcher import NepseFetcher
 from analysis import InstitutionalEngine
 from signals import SignalLab
 
-st.set_page_config(page_title="NEPSE Institutional Pro", layout="wide")
+st.set_page_config(page_title="NEPSE Pro Intelligence", layout="wide")
 
-# Persistent Data Loading
-@st.cache_data(ttl=60)
-def get_market_data():
-    raw = NepseFetcher().get_live_data()
-    processed = InstitutionalEngine().apply_metrics(raw)
-    return processed
+# Init classes
+fetcher = NepseFetcher()
+engine = InstitutionalEngine()
 
-st.title("🏛️ NEPSE Advanced Quant Terminal")
+st.title("📊 NEPSE Institutional Trade Engine")
 
-try:
-    data = get_market_data()
+# Fetch and Process
+with st.spinner('Scanning Live Market Flow...'):
+    raw_data = fetcher.get_live_data()
+    data = engine.apply_metrics(raw_data)
+
+if not data.empty:
+    avg_amihud = data['amihud'].median()
     
-    # Global Stats for Signal Logic
-    stats = {
-        'amihud_median': data['amihud'].median(),
-        'vol_median': data['volume'].median()
-    }
-
-    # Dashboard Metrics
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Live Symbols", len(data))
-    m2.metric("Institutional Stocks", len(data[data['is_institutional']]))
-    m3.metric("Avg Mkt Volatility", f"{data['returns'].mean()*100:.2f}%")
-    m4.metric("Active Metaorders", len(data[data['rvol'] > 3]))
-
-    tab1, tab2, tab3 = st.tabs(["🎯 AI Signals", "🔍 Institutional Matrix", "📈 Full Market Scanner"])
-
+    tab1, tab2 = st.tabs(["🎯 AI Signals & Advice", "🔬 Technical Matrix"])
+    
     with tab1:
-        signals = []
-        for _, row in data.iterrows():
-            sig = SignalLab.get_summary(row, stats)
-            if sig['Signal'] != "WAIT":
-                signals.append(sig)
+        summaries = [SignalLab.get_summary(row, avg_amihud) for _, row in data.iterrows()]
+        res_df = pd.DataFrame(summaries)
         
-        if signals:
-            sig_df = pd.DataFrame(signals).sort_values(by='Confidence', ascending=False)
-            st.dataframe(sig_df[['Symbol', 'Signal', 'Confidence', 'Target', 'SimpleSummary']], use_container_width=True, hide_index=True)
+        # Display only relevant signals
+        logic_df = res_df[res_df['Action'] != "NEUTRAL"].sort_values(by='Confidence', ascending=False)
+        if not logic_df.empty:
+            st.dataframe(logic_df, use_container_width=True, hide_index=True)
         else:
-            st.info("Market is currently quiet. No institutional footprints detected.")
+            st.info("The market is currently quiet. No institutional breakouts detected.")
 
     with tab2:
-        st.subheader("Smart Money Cluster Analysis")
-        inst_only = data[data['is_institutional']].sort_values(by='turnover', ascending=False)
-        st.dataframe(inst_only[['symbol', 'ltp', 'volume', 'amihud', 'kyle_lambda', 'volatility_regime']], use_container_width=True)
-
-    with tab3:
-        st.subheader("All Sector Data")
-        st.dataframe(data, use_container_width=True)
-
-except Exception as e:
-    st.error(f"Engine Error: {e}")
+        st.dataframe(data.sort_values(by='turnover', ascending=False), use_container_width=True)
+else:
+    st.error("Data refresh failed. Please check your internet or site source.")
     
