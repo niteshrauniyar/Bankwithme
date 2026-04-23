@@ -5,69 +5,54 @@ import re
 
 class NepseFetcher:
     def __init__(self):
-        self.scraper = cloudscraper.create_scraper(
-            browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
-        )
+        self.scraper = cloudscraper.create_scraper(browser={'browser': 'chrome'})
 
     def get_live_data(self):
         try:
-            # Source: ShareSansar Today Price (Most reliable for Live/Today data)
+            # Targeted Live URL for 2026 accuracy
             url = "https://www.sharesansar.com/today-price"
-            response = self.scraper.get(url, timeout=20)
+            r = self.scraper.get(url, timeout=20)
             
-            # Read all tables and find the one containing stock data
-            dfs = pd.read_html(response.text)
-            df = dfs[0]
+            # Find the correct table (usually the first one with 'Symbol')
+            all_tables = pd.read_html(r.text)
+            df = None
+            for table in all_tables:
+                if 'Symbol' in table.columns or 'SYMBOL' in table.columns:
+                    df = table
+                    break
+            
+            if df is None: return pd.DataFrame()
 
-            # Standardize Headers: Force to uppercase and remove extra characters
+            # 1. Clean Headers
             df.columns = [str(c).strip().upper() for c in df.columns]
 
-            # FUZZY MAPPING: Connects varying website names to our code variables
+            # 2. Precise Mapping
             mapping = {
-                'SYMBOL': 'symbol', 'TICKER': 'symbol',
-                'LTP': 'ltp', 'LTP(RS)': 'ltp', 'LAST TRADED PRICE': 'ltp',
-                'OPEN': 'open', 'OPEN PRICE': 'open',
-                'HIGH': 'high', 'HIGH PRICE': 'high',
-                'LOW': 'low', 'LOW PRICE': 'low',
-                'VOLUME': 'volume', 'TRADED SHARES': 'volume', 'QTY': 'volume',
-                'TURNOVER': 'turnover', 'AMOUNT': 'turnover', 'TRADED AMOUNT': 'turnover'
+                'SYMBOL': 'symbol', 'LTP': 'ltp', 'LTP(RS)': 'ltp',
+                'OPEN': 'open', 'HIGH': 'high', 'LOW': 'low',
+                'VOLUME': 'volume', 'TRADED SHARES': 'volume',
+                'TURNOVER': 'turnover', 'AMOUNT': 'turnover'
             }
             df = df.rename(columns=mapping)
 
-            # CLEANING: Remove commas and whitespace from all numeric columns
-            numeric_cols = ['ltp', 'open', 'high', 'low', 'volume', 'turnover']
-            for col in numeric_cols:
+            # 3. Heavy-Duty Numeric Cleaning (Handles 1,20,345.00)
+            cols = ['ltp', 'open', 'high', 'low', 'volume', 'turnover']
+            for col in cols:
                 if col in df.columns:
                     df[col] = df[col].astype(str).apply(self._clean_numeric)
 
-            # DATA INTEGRITY: Ensure turnover exists (Price * Volume fallback)
-            if 'turnover' not in df.columns or df['turnover'].isna().all():
-                df['turnover'] = df['ltp'] * df['volume']
-
-            # Remove any rows that don't have a valid Symbol or LTP
-            return df.dropna(subset=['symbol', 'ltp']).drop_duplicates(subset=['symbol'])
-
-        except Exception as e:
-            # Fallback to help you debug in Streamlit logs
-            print(f"FETCH ERROR: {e}")
-            return self._emergency_data()
+            # 4. Accuracy Check: Ensure LTP is not zero
+            df = df[df['ltp'] > 0]
+            
+            return df.dropna(subset=['symbol']).drop_duplicates('symbol')
+        except Exception:
+            return pd.DataFrame()
 
     def _clean_numeric(self, val):
-        """Removes commas and non-numeric junk: '1,200.50' -> 1200.5"""
         if pd.isna(val) or val == 'nan': return 0.0
-        cleaned = re.sub(r'[^0-9\.-]', '', str(val))
+        # This regex removes commas and whitespace but keeps decimals
+        cleaned = re.sub(r'[^\d.-]', '', str(val))
         try:
             return float(cleaned)
         except:
             return 0.0
-
-    def _emergency_data(self):
-        # Keeps the app alive if the website is down
-        return pd.DataFrame({
-            'symbol': ['NICA', 'NABIL', 'HRL', 'KBL'],
-            'ltp': [364.5, 526.0, 515.0, 224.0],
-            'open': [360.0, 520.0, 505.0, 221.0],
-            'volume': [120000, 150000, 45000, 670000],
-            'turnover': [43740000, 78900000, 23175000, 150080000]
-        })
-        
