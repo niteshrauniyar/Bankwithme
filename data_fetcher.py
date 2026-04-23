@@ -1,73 +1,69 @@
 import pandas as pd
-import numpy as np
 import requests
-import re
+import time
 
 class NepseFetcher:
     def __init__(self):
-        # Official NEPSE headers to prevent "403 Forbidden"
+        self.base_url = "https://www.nepalstock.com.np"
+        self.api_url = f"{self.base_url}/api/nots/nepse-data/today-price?size=500"
+        self.session = requests.Session()
+        # Headers are mandatory to avoid being flagged as a bot
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
-            'Referer': 'https://www.nepalstock.com.np/'
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': f"{self.base_url}/",
+            'Connection': 'keep-alive'
         }
 
     def get_live_data(self):
         try:
-            # 1. Fetch from Official NEPSE NOTS API
-            # This endpoint provides the "Today's Price" JSON directly
-            url = "https://www.nepalstock.com.np/api/nots/nepse-data/today-price?size=500"
-            response = requests.get(url, headers=self.headers, timeout=20)
+            # Step 1: Visit the home page to establish a "Human" session and get cookies
+            self.session.get(self.base_url, headers=self.headers, timeout=10)
+            time.sleep(1) # Small delay to mimic human behavior
+
+            # Step 2: Fetch the actual JSON data
+            response = self.session.get(self.api_url, headers=self.headers, timeout=20)
             
             if response.status_code != 200:
                 return self._fallback_logic()
 
-            json_data = response.json()
-            # Extract content from the NEPSE JSON structure
-            raw_list = json_data.get('content', [])
-            df = pd.DataFrame(raw_list)
+            data = response.json().get('content', [])
+            if not data:
+                return self._fallback_logic()
 
-            if df.empty: return self._fallback_logic()
+            df = pd.DataFrame(data)
 
-            # 2. Map Official NEPSE Keys to Our Variables
-            # Official keys: 'symbol', 'lastTradedPrice', 'openPrice', 'highPrice', 'lowPrice', 'totalQty', 'totalTurnover'
+            # Mapping official API keys to our analysis variables
+            # NEPSE API keys often use camelCase
             mapping = {
                 'symbol': 'symbol',
                 'lastTradedPrice': 'ltp',
                 'openPrice': 'open',
-                'highPrice': 'high',
-                'lowPrice': 'low',
                 'totalQty': 'volume',
                 'totalTurnover': 'turnover'
             }
             df = df.rename(columns=mapping)
+            
+            # Convert to numeric and clean
+            for col in ['ltp', 'open', 'volume', 'turnover']:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-            # 3. Final Numeric Scrubbing
-            cols = ['ltp', 'open', 'high', 'low', 'volume', 'turnover']
-            for col in cols:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
-
-            # Filtering out non-equity instruments (Indices, Debentures etc. if needed)
-            return df[['symbol', 'ltp', 'open', 'high', 'low', 'volume', 'turnover']].drop_duplicates('symbol')
+            return df[['symbol', 'ltp', 'open', 'volume', 'turnover']]
 
         except Exception as e:
-            print(f"Official API Error: {e}")
+            st.error(f"API Connection Failed: {e}")
             return self._fallback_logic()
 
     def _fallback_logic(self):
-        """Emergency Fallback if the official API is under maintenance"""
-        import cloudscraper
-        scraper = cloudscraper.create_scraper()
+        """Scrapes a public mirror if official API is blocked"""
         try:
-            # Secondary official-like source
-            r = scraper.get("https://www.sharesansar.com/live-trading", timeout=10)
-            df = pd.read_html(r.text)[0]
-            df.columns = [str(c).strip().upper() for c in df.columns]
+            # Mirror sites are often easier to scrape when official ones are down
+            url = "https://nepsealpha.com/live-nepse"
+            df = pd.read_html(url)[0]
+            df.columns = [str(c).upper() for c in df.columns]
             df = df.rename(columns={'SYMBOL': 'symbol', 'LTP': 'ltp', 'VOLUME': 'volume', 'OPEN': 'open'})
-            for c in ['ltp', 'volume', 'open']:
-                df[c] = pd.to_numeric(df[c].astype(str).str.replace(',', ''), errors='coerce')
-            df['turnover'] = df['ltp'] * df['volume']
             return df
         except:
             return pd.DataFrame()
+            
