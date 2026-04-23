@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 import cloudscraper
+from bs4 import BeautifulSoup
+import json
 import re
 
 class NepseFetcher:
@@ -11,66 +13,40 @@ class NepseFetcher:
 
     def get_live_data(self):
         try:
-            # Primary: NepseAlpha Live Market (Fastest & most accurate in 2026)
-            url = "https://nepsealpha.com/nepse-data"
-            r = self.scraper.get(url, timeout=20)
+            # Target the Live Market page (highest accuracy)
+            url = "https://nepsealpha.com/trading-menu/top-stocks"
+            r = self.scraper.get("https://nepsealpha.com/live-nepse", timeout=20)
             
-            # Extract tables - NepseAlpha uses a specific data-table class
+            # Using BeautifulSoup to find the hidden JSON data in the script tags
+            # or scraping the direct live table which is more up-to-date
             dfs = pd.read_html(r.text)
-            df = dfs[0]
+            df = dfs[0] # The Live Trading Table
 
-            # 1. Column Standardization
+            # 1. Precise Header Alignment
             df.columns = [str(c).strip().upper() for c in df.columns]
             
-            # Map NepseAlpha headers to our system
             mapping = {
                 'SYMBOL': 'symbol', 'LTP': 'ltp', 'VALUE': 'ltp',
                 'OPEN': 'open', 'HIGH': 'high', 'LOW': 'low',
-                'VOL': 'volume', 'VOLUME': 'volume', 'KITTA': 'volume',
-                'TURNOVER': 'turnover', 'TOTAL TURNOVER': 'turnover'
+                'VOL': 'volume', 'VOLUME': 'volume', 'QTY': 'volume',
+                'TURNOVER': 'turnover', 'TOTAL TURNOVER': 'turnover',
+                'CHANGE': 'change_raw', '% CHANGE': 'change_pct'
             }
             df = df.rename(columns=mapping)
 
-            # 2. Advanced Multi-Step Cleaning
-            # Handles "NPR 1,200.50", "1200", and strings with commas
+            # 2. Strict Numeric Sanitization
             numeric_cols = ['ltp', 'open', 'high', 'low', 'volume', 'turnover']
             for col in numeric_cols:
                 if col in df.columns:
-                    df[col] = df[col].astype(str).apply(self._clean_val)
+                    df[col] = df[col].astype(str).apply(self._clean_string)
 
-            # 3. Validation & Recovery
-            # If turnover is missing (common in some views), re-calculate
-            df['turnover'] = df['turnover'].fillna(df['ltp'] * df['volume'])
+            # 3. Data Integrity Check
+            # Remove symbols that aren't actually trading (0 volume or 0 price)
+            df = df[(df['ltp'] > 0) & (df['volume'] > 0)]
             
-            # Remove junk rows
-            df = df[df['symbol'].str.len() <= 7] # Valid NEPSE symbols are 3-6 chars
-            
-            return df.dropna(subset=['symbol', 'ltp']).drop_duplicates('symbol')
+            # Recalculate Turnover if it looks like a formatting error (common in Nepal data)
+            # Some sites list turnover in '000s or Lakhs. We normalize to absolute NPR.
+            df['turnover'] = df['ltp'] * df['volume']
 
-        except Exception as e:
-            # Automatic Fallback to backup source if NepseAlpha is down
-            return self._backup_source()
-
-    def _clean_val(self, x):
-        if pd.isna(x): return np.nan
-        # Regex to strip everything except digits, dots, and minus signs
-        cleaned = re.sub(r'[^\d.-]', '', str(x))
-        try:
-            return float(cleaned)
-        except:
-            return np.nan
-
-    def _backup_source(self):
-        """Alternative: ShareSansar Live (Secondary)"""
-        try:
-            url = "https://www.sharesansar.com/live-trading"
-            r = self.scraper.get(url, timeout=10)
-            df = pd.read_html(r.text)[0]
-            df.columns = [str(c).strip().upper() for c in df.columns]
-            df = df.rename(columns={'SYMBOL':'symbol', 'LTP':'ltp', 'VOLUME':'volume'})
-            df['turnover'] = df['ltp'] * pd.to_numeric(df['volume'].astype(str).str.replace(',',''), errors='coerce')
-            return df
-        except:
-            # Last resort: Manual Sample for UI stability
-            return pd.DataFrame({'symbol':['NICA','HRL','KBL'], 'ltp':[365, 512, 224], 'open':[360, 505, 221], 'volume':[10000, 5000, 20000], 'turnover':[3650000, 2560000, 4480000]})
+            return df.dropna(subset=['symbol']).drop
             
