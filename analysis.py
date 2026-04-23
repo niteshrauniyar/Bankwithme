@@ -1,45 +1,35 @@
 import pandas as pd
 import numpy as np
-import cloudscraper
+from sklearn.cluster import KMeans
 
-class NepseFetcher:
-    def __init__(self):
-        self.scraper = cloudscraper.create_scraper()
+class InstitutionalEngine:
+    @staticmethod
+    def apply_metrics(df):
+        if df.empty: return df
 
-    def get_live_data(self):
+        # 1. Volatility Calculation
+        df['returns'] = (abs(df['ltp'] - df['open']) / df['open']).fillna(0)
+        
+        # 2. Amihud Illiquidity Ratio
+        # Measures: How much does 1 Million NPR of volume move the price?
+        # Institutional logic: They want to move large volume with LOW price impact.
+        df['amihud'] = df['returns'] / ((df['turnover'] / 1_000_000) + 1e-9)
+        
+        # 3. Institutional Clustering (K-Means)
         try:
-            # Primary Live Price Source
-            url = "https://www.sharesansar.com/today-price"
-            response = self.scraper.get(url, timeout=15)
-            df = pd.read_html(response.text)[0]
+            # We use Volume and Turnover to find the "Big Fish"
+            X = df[['volume', 'turnover']].fillna(0)
+            # Normalize for better clustering
+            X_norm = (X - X.mean()) / X.std()
             
-            # Standardization
-            df.columns = [str(c).strip().upper() for c in df.columns]
-            rename_map = {'SYMBOL': 'symbol', 'LTP': 'ltp', 'OPEN': 'open', 
-                          'HIGH': 'high', 'LOW': 'low', 'VOLUME': 'volume', 
-                          'TURNOVER': 'turnover', 'AMOUNT': 'turnover'}
-            df = df.rename(columns=rename_map)
-
-            # Force Numeric Cleaning
-            for col in ['ltp', 'open', 'high', 'low', 'volume', 'turnover']:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce')
+            kmeans = KMeans(n_clusters=min(len(df), 3), n_init=10, random_state=42)
+            df['cluster'] = kmeans.fit_predict(X_norm.fillna(0))
             
-            # Calculate turnover if missing
-            if 'turnover' not in df.columns or df['turnover'].isnull().all():
-                df['turnover'] = df['ltp'] * df['volume']
+            # The cluster with the highest median turnover is flagged as Institutional
+            inst_cluster_id = df.groupby('cluster')['turnover'].median().idxmax()
+            df['is_institutional'] = df['cluster'] == inst_cluster_id
+        except:
+            df['is_institutional'] = False
 
-            return df.dropna(subset=['symbol', 'ltp'])
-        except Exception:
-            return self._fallback()
-
-    def _fallback(self):
-        # Keeps the app from crashing during NEPSE downtime
-        return pd.DataFrame({
-            'symbol': ['NABIL', 'NTC', 'GBIME'],
-            'ltp': [600, 850, 220],
-            'open': [595, 840, 218],
-            'volume': [50000, 20000, 100000],
-            'turnover': [30000000, 17000000, 22000000]
-        })
+        return df
         
