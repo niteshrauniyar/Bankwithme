@@ -1,43 +1,47 @@
-import pandas as pd
-
 class SignalLab:
     @staticmethod
-    def get_summary(row, df_avg_amihud):
+    def get_summary(row, market_avg_amihud):
+        # Scoring logic based on research features
         score = 0
-        verdict = "NEUTRAL"
         reasons = []
 
-        # Research Logic: Institutional Accumulation (Price Up + Inst Cluster)
-        if row['is_institutional'] and row['ltp'] > row['open']:
+        # 3.1 Order Splitting (Volume spike + Inst cluster)
+        if row['is_institutional'] and row['volume'] > 10000:
             score += 40
-            reasons.append("Institutional Accumulation (Cluster Detected)")
-        
-        # Research Logic: Low Price Impact (Amihud < Median)
-        # Signifies 'Informed Trading' absorbing supply without moving price too much
-        if row['amihud'] < df_avg_amihud:
-            score += 25
-            reasons.append("Efficient Absorption (Low Market Impact)")
+            reasons.append("Big Player activity (Cluster Detected)")
 
-        # Research Logic: Volume Strength (Metaorder Signature)
-        if row['v_strength'] > 2.0:
-            score += 20
-            reasons.append("Order Splitting Signature (High Relative Volume)")
+        # 3.2 Informed Trading (High Centrality + Low Amihud)
+        if row['market_centrality'] > 1.0 and row['amihud'] < market_avg_amihud:
+            score += 30
+            reasons.append("Informed trading signature (High Influence)")
 
-        # Final Verdict Calculation
+        # Decision
+        verdict = "NEUTRAL"
         if score >= 60: verdict = "STRONG BUY"
         elif score >= 40: verdict = "BUY"
-        elif row['ltp'] < row['open'] and row['is_institutional']: verdict = "INSTITUTIONAL DISTRIBUTION (SELL)"
+        elif row['ltp'] < row['open'] * 0.98 and row['is_institutional']: verdict = "DISTRIBUTION (SELL)"
 
-        # Target Calculation based on Volatility + 2026 NEPSE Ranges
+        # Target & SL (Institutional Ranges)
         entry = row['ltp']
-        target = entry * 1.12 if verdict == "STRONG BUY" else entry * 1.07
-        sl = entry * 0.94
+        target = round(entry * 1.10, 2) # Institutional target usually 10%
+        sl = round(entry * 0.95, 2)
+
+        # Simple Words explanation
+        if verdict == "STRONG BUY":
+            explanation = f"YES: Institutional accumulation detected. Large orders are being split to hide entry. Target: Rs. {target}."
+        elif verdict == "BUY":
+            explanation = f"WATCH: Big players are active. Good entry near {entry}. Target: Rs. {target}."
+        elif verdict == "DISTRIBUTION (SELL)":
+            explanation = f"NO: Large players are exiting their positions. High selling pressure. Support at Rs. {sl}."
+        else:
+            explanation = "RETAIL NOISE: No clear big player footprint. Better to wait."
 
         return {
             'Symbol': row['symbol'],
             'Signal': verdict,
-            'Target': round(target, 1),
-            'StopLoss': round(sl, 1),
-            'Insight': " | ".join(reasons) if reasons else "Retail Noise"
+            'Target': target,
+            'StopLoss': sl,
+            'Insight': " | ".join(reasons) if reasons else "Retail Activity",
+            'SimpleSummary': explanation
         }
         
